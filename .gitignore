@@ -1,0 +1,28 @@
+# Ignore all .pt files
+*.pt
+
+# Ignore all .csv files
+*.csv
+
+# Ignore all .fasta files
+*.fasta
+
+# Ignore everything in the models folder
+models/
+
+runs/
+old_runs/
+old_logs/
+logs/
+
+myenv/
+
+*.pkl
+
+*.npy
+
+*.tsv
+
+*.err
+
+*.out
