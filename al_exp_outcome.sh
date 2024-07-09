@@ -1,13 +1,14 @@
 #!/bin/bash
 
-#SBATCH --job-name=combinatorial_strategies              # Job name
+#SBATCH --job-name=al_exp_outcome             # Job name
 #SBATCH --nodes=1                           # Number of nodes
-#SBATCH --ntasks-per-node=1            # Number of cores per node
+#SBATCH --ntasks-per-node=1                 # Number of cores per node
 #SBATCH --mem=64G                           # Memory per node
-#SBATCH --time=12:00:00                     # Time limit
-#SBATCH --output=./logs/combinatorial_strategies.%j.out  # Standard output log
-#SBATCH --error=./logs/combinatorial_strategies.%j.err   # Standard error log
-#SBATCH --partition=test                # Partition name, if applicable
+#SBATCH --gpus=1                          # Number of GPUs
+#SBATCH --time=06:00:00                     # Time limit
+#SBATCH --output=./logs/al_exp_outcome.%j.out  # Standard output log
+#SBATCH --error=./logs/al_exp_outcome.%j.err   # Standard error log
+#SBATCH --partition=gpu_test                # Partition name, if applicable
 
 # Loading the environment or modules necessary for running the script
 # Assuming 'myenv' is the name of your Python environment
@@ -19,4 +20,4 @@ echo "Using Python version:"
 srun python --version
 
 # Execute the Python script with command-line arguments passed to this script
-srun python combinatorial_strategies.py
+srun python al_exp_outcome.py "$@"

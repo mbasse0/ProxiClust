@@ -387,8 +387,8 @@ def get_random(sequences, targets, cycles, samples_per_cycle, folder_path, init_
     new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
     labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    tsne_clusters = plot_tsne_clusters(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/init_random_tsne.png')
-    print("Tsne clusters", tsne_clusters)
+    # tsne_clusters = plot_tsne_clusters(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/init_random_tsne.png')
+    # print("Tsne clusters", tsne_clusters)
 
     pearson_corrs = []
     spearman_corrs = []
@@ -396,24 +396,26 @@ def get_random(sequences, targets, cycles, samples_per_cycle, folder_path, init_
 
     gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        new_idx = np.random.choice(unlabelled_idx, samples_per_cycle, replace=False)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
+    new_idx = np.random.choice(unlabelled_idx, cycles*samples_per_cycle, replace=False)
+    labelled_idx.extend(new_idx)
+    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
+        
+    labelled_seq = np.array([sequences[i] for i in labelled_idx])
+    labelled_targets = np.expand_dims([targets[i] for i in labelled_idx],axis=1)
+    gp.add(labelled_seq, labelled_targets)
+
+    remaining_seq = [sequences[i] for i in unlabelled_idx]
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
     
     print("Train data after all cycles", len(gp.x_train))
     if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_random_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/random_tsne_{j}.png')
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_random.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/random_tsne.png')
     return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
 
 
@@ -457,14 +459,19 @@ def get_diverse(sequences, sequences_str, targets, cycles, samples_per_cycle, fo
         new_seq = np.array([sequences[i] for i in new_idx])
         new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
+
+    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
+    labelled_seq = np.array([sequences[i] for i in labelled_idx])
+    labelled_targets = np.expand_dims([targets[i] for i in labelled_idx],axis=1)
+    gp.add(labelled_seq, labelled_targets)
+
+    remaining_seq = [sequences[i] for i in unlabelled_idx]
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
     print("Train data after all cycles", len(gp.x_train))
 
     if plot_corr:
@@ -998,22 +1005,9 @@ def get_from_epistasis_clusters(sequences, targets, clusters_generators, cycles,
 
 
 
-def get_ucb(sequences, sequences_str, targets, clusters_generators, alpha, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    clusters = {}
-    cluster_weights = {}
-    for i, cluster in enumerate(clusters_generators):
-        # clusters[i] = get_subset_combinatorial(df, cluster).index.tolist()
-        comb_idx = get_subset_combinatorial(df, cluster).index.tolist()
-        clusters[i] = comb_idx
-        print("Cluster i assigned to", clusters[i])
-        cluster_weights[i] = len(comb_idx)
+def get_ucb(sequences, sequences_str, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
     
-    print("clusters", clusters)
-    print("cluster_weights", cluster_weights)
-    # Assign weights to each cluster based on the number of sequences in each cluster
-    total_weight = sum(cluster_weights.values())
-
-    cluster_weights = {cluster: weight/total_weight for cluster, weight in cluster_weights.items()}
+   
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
     new_seq = np.array([sequences[i] for i in init_indices])
     new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
@@ -1027,11 +1021,7 @@ def get_ucb(sequences, sequences_str, targets, clusters_generators, alpha, cycle
 
     gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
-    for j in range(cycles):
-        print("Cycle", j)
-        gp.add(new_seq, new_targets)
-
-        
+    for k in range(cycles):        
         labelled_sequences = [sequences_str[i] for i in labelled_idx]
         scores = {}
         for cluster in clusters:
@@ -1052,43 +1042,33 @@ def get_ucb(sequences, sequences_str, targets, clusters_generators, alpha, cycle
         sorted_indices = sorted(unlabelled_idx, key=lambda x: scores[x], reverse=True)
        
         new_idx = [sorted_indices[i] for i in range(samples_per_cycle)]
-        # new_idx = np.random.choice(clusters[cluster], samples_per_cycle, replace=False)
-        print("Chosen index", new_idx)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
         unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
+
+    labelled_seq = np.array([sequences[i] for i in labelled_idx])
+    labelled_targets = np.expand_dims([targets[i] for i in labelled_idx],axis=1)
+    print("Adding to GP")
+    gp.add(labelled_seq, labelled_targets)
+    print("Done adding to GP")
+
+    remaining_seq = [sequences[i] for i in unlabelled_idx]
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
     
     print("Train data after all cycles", len(gp.x_train))
     if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_usb_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/ucb_{alpha}_tsne_{j}.png')
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_usb.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/ucb_{alpha}_tsne.png')
     return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
 
 
 
-def get_ucb_auto_weight(sequences, sequences_str, targets, clusters_generators, alpha, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    clusters = {}
-    cluster_weights = {}
-    for i, cluster in enumerate(clusters_generators):
-        # clusters[i] = get_subset_combinatorial(df, cluster).index.tolist()
-        comb_idx = get_subset_combinatorial(df, cluster).index.tolist()
-        clusters[i] = comb_idx
-        print("Cluster i assigned to", clusters[i])
-        cluster_weights[i] = len(comb_idx)
-    
-    print("clusters", clusters)
-    print("cluster_weights", cluster_weights)
-    # Assign weights to each cluster based on the number of sequences in each cluster
-    total_weight = sum(cluster_weights.values())
+def get_ucb_auto_weight(sequences, sequences_str, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
 
-    cluster_weights = {cluster: weight/total_weight for cluster, weight in cluster_weights.items()}
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
     new_seq = np.array([sequences[i] for i in init_indices])
     new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
@@ -1102,10 +1082,7 @@ def get_ucb_auto_weight(sequences, sequences_str, targets, clusters_generators, 
 
     gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
-    for j in range(cycles):
-        print("Cycle", j)
-        gp.add(new_seq, new_targets)
-
+    for k in range(cycles):
         
         labelled_sequences = [sequences_str[i] for i in labelled_idx]
         scores = {}
@@ -1130,23 +1107,27 @@ def get_ucb_auto_weight(sequences, sequences_str, targets, clusters_generators, 
         sorted_indices = sorted(unlabelled_idx, key=lambda x: scores[x], reverse=True)
        
         new_idx = [sorted_indices[i] for i in range(samples_per_cycle)]
-        # new_idx = np.random.choice(clusters[cluster], samples_per_cycle, replace=False)
-        print("Chosen index", new_idx)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
         unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
+    
+    labelled_seq = np.array([sequences[i] for i in labelled_idx])
+    labelled_targets = np.expand_dims([targets[i] for i in labelled_idx],axis=1)
+    print("Adding to GP")
+    gp.add(labelled_seq, labelled_targets)
+    print("Done adding to GP")
+    
+    remaining_seq = [sequences[i] for i in unlabelled_idx]
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
     
     print("Train data after all cycles", len(gp.x_train))
     if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_usb_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/ucb_auto_weight_tsne_{j}.png')
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_usb.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/ucb_auto_weight_tsne.png')
     return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
 
 
@@ -1332,6 +1313,23 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         results['spearman'][index].append(spearman_corrs)
         results['r_squared'][index].append(rsquared_vals)
 
+
+
+
+    cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
+    clusters = {}
+    cluster_weights = {}
+    for i, cluster in enumerate(cluster_generators):
+        # clusters[i] = get_subset_combinatorial(df, cluster).index.tolist()
+        comb_idx = get_subset_combinatorial(df, cluster).index.tolist()
+        clusters[i] = comb_idx
+        print("Cluster i assigned to", clusters[i])
+        cluster_weights[i] = len(comb_idx)
+    
+    # Assign weights to each cluster based on the number of sequences in each cluster
+    total_weight = sum(cluster_weights.values())
+
+    cluster_weights = {cluster: weight/total_weight for cluster, weight in cluster_weights.items()}
     # Running the experiments
     for j in range(runs):
         if j==0:
@@ -1365,9 +1363,9 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
             # results5 = get_diverse_embeddings_cosine(embeddings, targets, cycles, samples_per_cycle, folder_path, 'max_linkage', init_size, plot_corr)
             # update_results(results, results5, "Diverse embeddings cosine dissimilarity acquisition (max linkage dissimilarity) ")
             alpha = 1.0
-            cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
+            # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
             print(cluster_generators)
-            results5 = get_ucb(embeddings, sequences, targets, cluster_generators, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+            results5 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
             update_results(results, results5, f"UCB acquisition (alpha = {alpha}) ")
 
         if run_6:
@@ -1379,7 +1377,7 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
             alpha = 10
             cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
             print(cluster_generators)
-            results6 = get_ucb(embeddings, sequences, targets, cluster_generators, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+            results6 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
             update_results(results, results6, f"UCB acquisition (alpha = {alpha}) ")
         if run_7:
             print("Running exp7")
@@ -1405,7 +1403,7 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
             alpha = 100
             cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
             print(cluster_generators)
-            results8 = get_ucb(embeddings, sequences, targets, cluster_generators, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+            results8 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights,  alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
             update_results(results, results8, f"UCB acquisition (alpha = {alpha}) ")
 
         if run_9:
@@ -1418,7 +1416,7 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
             alpha = 0.1
             cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
             print(cluster_generators)
-            results9 = get_ucb(embeddings, sequences, targets, cluster_generators, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+            results9 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights,  alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
             update_results(results, results9, f"UCB acquisition (alpha = {alpha}) ")
         
         if run_10:
@@ -1428,16 +1426,20 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
             alpha = -1
             cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
             print(cluster_generators)
-            results10 = get_ucb_auto_weight(embeddings, sequences, targets, cluster_generators, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+            results10 = get_ucb_auto_weight(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
             update_results(results, results10, f"UCB auto weight acquisition (alpha = {alpha}) ")
         
         if run_11:
             print("Running exp11")
             # results11 = get_diverse_embeddings(embeddings, targets, cycles, samples_per_cycle, folder_path, 'max_linkage', init_size, plot_corr)
-            results11 = get_diverse_embeddings_cosine(embeddings, targets, cycles, samples_per_cycle, folder_path, 'largest_mean', init_size, plot_corr)
-            update_results(results, results11, "Diverse embeddings cosine dissimilarity acquisition (max mean dissimilarity) ")
+            # results11 = get_diverse_embeddings_cosine(embeddings, targets, cycles, samples_per_cycle, folder_path, 'largest_mean', init_size, plot_corr)
+            # update_results(results, results11, "Diverse embeddings cosine dissimilarity acquisition (max mean dissimilarity) ")
+
+            results11 = get_diverse(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
+            update_results(results, results11, "Diverse acquisition (min linkage)")
 
     print("Done Runnning the experiments")   
+
     # Save and plot results
     print("Saving results")
     for key in results:
@@ -1457,7 +1459,7 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
 
 cycles = 60
 samples_per_cycle = 1
-runs = 5
+runs = 1
 init_size=10
 
 # Current date and time
@@ -1474,4 +1476,4 @@ print("Folder path", folder_path)
 # 2,3,4,5,8,9,10
 # run_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=True, run_6=True, run_7=False, run_8=True, run_9=True, run_10=False, run_11=False
 
-run_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=True, run_11=False, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
+run_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=True, run_6=True, run_7=False, run_8=True, run_9=True, run_10=True, run_11=True, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)

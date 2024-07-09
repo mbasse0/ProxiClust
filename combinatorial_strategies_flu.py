@@ -28,6 +28,7 @@ if not os.path.exists(folder_path):
 
 # Load the dataframe
 dataset_path = "CH65_processed_new.csv"
+# dataset_path = "CH65_SI06_processed.csv"
 print("Dataset:", dataset_path)
 df_sorted =  pd.read_csv(dataset_path)
 # df_sorted = pd.read_csv("CH65_SI06_processed.csv")
@@ -281,9 +282,11 @@ def run_choose_benchmarks(df, n_loci=8, n_exp=2, samples_per_exp=5):
 
     # indices_pool = [13, 14, 11,  7,  6, 10, 12,  8,  4,  9]
     # indices_pool = [ 0,  5,  6,  2, 12,  1, 13,  11,  3, 14]
-    indices_pool = [ 6, 10,  7, 11,  1,  0,  8,  9,  5,  4]
+    # indices_pool = [ 6, 10,  7, 11,  1,  0,  8,  9,  5,  4]
+    indices_pool = list(range(16))
     few_mut_list = list(combinations(indices_pool, n_loci))
     for k in range(len(few_mut_list)):
+        print("Iteration", k, " out of ", len(few_mut_list))
         key_few_mut = few_mut_list[k]
         chosen_ind.append(key_few_mut)
         print("Chosen indices", key_few_mut)
@@ -296,9 +299,9 @@ def run_choose_benchmarks(df, n_loci=8, n_exp=2, samples_per_exp=5):
         ind, dist = proximity_clustering(desai_positions, n_exp, k=samples_per_exp)
         strategy_lists = [[key_few_mut[el] for el in ind] for ind in ind.values()]
 
-        strategy_lists, _ = even_kmeans_clustering(desai_positions, n_exp, samples_per_exp)
+        # strategy_lists, _ = even_kmeans_clustering(desai_positions, n_exp, samples_per_exp)
         # strategy_lists, _ = kmeans_clustering(desai_positions, n_exp)
-        print("even kmeans Strategy gives ", strategy_lists)
+        # print("even kmeans Strategy gives ", strategy_lists)
         training_set = None
         for indices in strategy_lists:
             training_set = pd.concat([training_set, get_subset_combinatorial(df, indices)])
@@ -308,30 +311,25 @@ def run_choose_benchmarks(df, n_loci=8, n_exp=2, samples_per_exp=5):
         print("R² for strategy", r2_strat)
         r2_strat_list.append(r2_strat)
 
-        r2_exhaustive = exhaustive_benchmark(df, test_set, n_exp, samples_per_exp, key_few_mut, model_type='linear', use_onehot=True)
-        r2_lists.append(r2_exhaustive)
-        median_exhaustive = np.median(r2_exhaustive)
-        print("Median of exhaustive", median_exhaustive)
-        quantile_list.append(compute_quantile(r2_strat, r2_exhaustive))
+        # r2_exhaustive = exhaustive_benchmark(df, test_set, n_exp, samples_per_exp, key_few_mut, model_type='linear', use_onehot=True)
+        # r2_lists.append(r2_exhaustive)
+        # median_exhaustive = np.median(r2_exhaustive)
+        # print("Median of exhaustive", median_exhaustive)
+        # quantile_list.append(compute_quantile(r2_strat, r2_exhaustive))
 
-        plt.clf()
-        plt.boxplot(r2_exhaustive)
-        plt.ylim(median_exhaustive - 1 , 1)
-        plt.axhline(y=r2_strat, color='r', linestyle='--')
-        plt.title(f"Benchmark for indices: {key_few_mut}")
-        plt.savefig(folder_path+f"/benchmark_{key_few_mut}.png")
+        # plt.clf()
+        # plt.boxplot(r2_exhaustive)
+        # plt.ylim(median_exhaustive - 1 , 1)
+        # plt.axhline(y=r2_strat, color='r', linestyle='--')
+        # plt.title(f"Benchmark for indices: {key_few_mut}")
+        # plt.savefig(folder_path+f"/benchmark_{key_few_mut}.png")
 
-    threshold_keep = 0.7
     np.save(folder_path+"/r2_lists.npy", r2_lists)
     np.save(folder_path+"/chosen_indices.npy", chosen_ind)
     np.save(folder_path+"/r2_strat_list.npy", r2_strat_list)
     print("Average increase in R² comapared to median value", np.mean([r2_strat_list[i] - np.median(r2_lists[i]) for i in range(len(r2_strat_list))]))
-    print("Average increase in R² comapared to median value, for max values > ", threshold_keep, np.mean([r2_strat_list[i] - np.median(r2_lists[i]) for i in range(len(r2_strat_list)) if np.max(r2_lists[i]) > threshold_keep]))
     print("Average quantile", np.mean(quantile_list))
-    print("Average quantile for max values > ", threshold_keep, np.mean([quantile_list[i] for i in range(len(r2_strat_list)) if np.max(r2_lists[i]) > threshold_keep]))
     print("All quantiles", quantile_list)
-    print("All quantiles when positive strategy > ", threshold_keep, [quantile_list[i] for i in range(len(quantile_list)) if np.max(r2_lists[i])>threshold_keep])
-    print("Number of positive strategies > ", threshold_keep, len([i for i in range(len(quantile_list)) if np.max(r2_lists[i])>threshold_keep]))
 
 
 def proximity_strategy(df, mut_indices, n_exp, samples_per_exp):
@@ -364,8 +362,8 @@ n_exp_list = [2,3,4,5,6]
 samples_per_exp_list = [2,3,4,5,6,7,8]
 
 
-key_few_mut = [ 6, 10,  7, 11,  1,  0,  8,  9,  5,  4]
-# key_few_mut = range(16)
+# key_few_mut = [ 6, 10,  7, 11,  1,  0,  8,  9,  5,  4]
+key_few_mut = range(16)
 print("RUnning for 90, wrong interface")
 desai_residues_light = residues_RBS_light.iloc[[el for el in key_few_mut if el < 6]]
 desai_residues_heavy = residues_RBS_heavy.iloc[[el for el in key_few_mut if el >= 6]]
@@ -374,12 +372,14 @@ desai_positions = desai_residues[["x_coord", "y_coord", "z_coord"]].values
 
 res = []
 
-# run_choose_benchmarks(df_sorted, n_loci=10, n_exp=3, samples_per_exp=8)
-for n_exp in n_exp_list:
-    for samples_per_exp in samples_per_exp_list:
-        print("Running proximal strategy for n_exp", n_exp, "samples_per_exp", samples_per_exp)
-        # run_multiple_benchmarks(df_sorted, n_loci=8, n_iter=2, n_exp=n_exp, samples_per_exp=samples_per_exp)
-        r2_strat, num_train = proximity_strategy(df_sorted, key_few_mut, n_exp, samples_per_exp)
-        res.append((n_exp, samples_per_exp, num_train, r2_strat))
+# run_choose_benchmarks(df_sorted, n_loci=10, n_exp=2, samples_per_exp=8)
+r2_all = proximity_strategy(df_sorted, list(range(16)), 2, 8)
+print("R2 all", r2_all)
+# for n_exp in n_exp_list:
+#     for samples_per_exp in samples_per_exp_list:
+#         print("Running proximal strategy for n_exp", n_exp, "samples_per_exp", samples_per_exp)
+#         # run_multiple_benchmarks(df_sorted, n_loci=8, n_iter=2, n_exp=n_exp, samples_per_exp=samples_per_exp)
+#         r2_strat, num_train = proximity_strategy(df_sorted, key_few_mut, n_exp, samples_per_exp)
+#         res.append((n_exp, samples_per_exp, num_train, r2_strat))
 
-np.save(folder_path+"/res_MA90.npy", res)
+# np.save(folder_path+"/res_MA90.npy", res)
