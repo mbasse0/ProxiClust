@@ -12,6 +12,9 @@ import os
 import datetime
 
 
+# This script intends to compare the needed number of train samples for different sizes of combinatorial datasets (synthetically created from extractions from desai old dataset)
+
+
 now = datetime.datetime.now()
 
 # Format datetime in YYYYMMDD_HHMMSS format

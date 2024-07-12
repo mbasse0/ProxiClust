@@ -807,9 +807,9 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
     print("Done plotting")
 
 
-cycles = 60
+cycles = 4
 samples_per_cycle = 1
-runs = 4
+runs = 3
 init_size=30
 
 # Current date and time
@@ -827,4 +827,4 @@ print("Folder path", folder_path)
 # run_experiments(run_1=False, run_2=True, run_3=True, run_4=True, run_5=True, run_6=False, run_7=False, run_8=True, run_9=True, run_10=True, run_11=False
 
 
-run_experiments(run_1=False, run_2=False, run_3=True, run_4=True, run_5=False, run_6=False, run_7=False, run_8=True, run_9=False, run_10=True, run_11=False, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
+run_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=False, run_11=False, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)

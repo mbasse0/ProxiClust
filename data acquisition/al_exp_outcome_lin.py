@@ -1134,18 +1134,13 @@ def get_ucb_auto_weight(sequences, sequences_str, targets, clusters, cluster_wei
 
 
 
-def plot_results(datasets, labels, title, folder_path):
+def plot_results(datasets, title, folder_path):
     plt.figure(figsize=(10, 6))
-
-    # Ensure that datasets and labels are of the same length
-    if len(datasets) != len(labels):
-        raise ValueError("Number of datasets and labels must match")
-
-    for data, label in zip(datasets, labels):
+    for data in datasets:
         mean_values = np.mean(data, axis=0)
         std_dev = np.std(data, axis=0)
         cycles = np.arange(len(mean_values))
-        plt.errorbar(cycles, mean_values, yerr=std_dev, fmt='-o', label=label, alpha=0.7)
+        plt.errorbar(cycles, mean_values, yerr=std_dev, fmt='-o', alpha=0.7)
 
     plt.xlabel('Number of Sampling Cycles')
     plt.ylabel(title)
@@ -1264,22 +1259,18 @@ def get_sparse(sequences, sequences_str, targets, cycles, samples_per_cycle, fol
     return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
 
 
-def plot_indiv_results(datasets, labels, title, folder_path):
+def plot_indiv_results(datasets, title, folder_path):
     plt.figure(figsize=(10, 6))
     colors = plt.cm.viridis(np.linspace(0, 1, len(datasets)))  # Using the Viridis colormap
 
-    # Ensure that datasets and labels are of the same length
-    if len(datasets) != len(labels):
-        raise ValueError("Number of datasets and labels must match")
-
-    for idx, (data, label) in enumerate(zip(datasets, labels)):
+    for idx, data in enumerate(datasets):
         for curve in data:
             cycles = np.arange(len(curve))
-            plt.plot(cycles, curve, label=label, alpha=0.7, color = colors[idx])
+            plt.plot(cycles, curve, alpha=0.7, color = colors[idx])
 
     from matplotlib.lines import Line2D
-    handles = [Line2D([0], [0], color=colors[i], lw=4, label=labels[i]) for i in range(len(labels))]
-    plt.legend(handles=handles)
+    # handles = [Line2D([0], [0], color=colors[i], lw=4, label=labels[i]) for i in range(len(labels))]
+    # plt.legend(handles=handles)
     
     plt.xlabel('Number of Sampling Cycles')
     plt.ylabel(title)
@@ -1470,31 +1461,23 @@ def run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, 
         for key in main_results.keys():
             main_results[key].extend(partial_results[key])
 
-    results = {"pearson": [], "spearman": [], "r_squared": []}
-    labels = []
     # with Pool(processes=4) as pool:  # Adjust the number of processes as needed
     #         all_results = pool.map(run_single_experiment, range(runs))
         
-    all_results = map(run_single_experiment, range(runs))
-    print("all results", all_results)
-    for partial_results, partial_labels in all_results:
-        merge_results(results, partial_results)
-        labels = partial_labels
-        print("Partial labels", partial_labels)
-
-    print('reutrned results', results)    
-    return results, labels
+    all_results  = []
+    for k in range(runs):
+        all_results.append(run_single_experiment(k))
+    print('reutrned results', all_results)
+    return all_results
 
 
 
 
-results, labels = run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=False, run_11=True, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
+results = run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=False, run_11=True, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
 
-print("Saving results")
-for key in results:
-    for i, data in enumerate(results[key]):
-        np.save(f'{folder_path}/all_{key}_{i+1}.npy', np.array(data))
 
-plot_indiv_results(results['pearson'], labels, 'All Pearson Correlation', folder_path)
-plot_indiv_results(results['spearman'], labels, 'All Spearman Correlation', folder_path)
-plot_indiv_results(results['r_squared'], labels, 'All R-squared Values', folder_path)
+np.save("all_results_{cycles}_cycles.npy", results)
+
+# plot_results(results['pearson'], labels, 'Pearson Correlation', folder_path)
+# plot_results(results['spearman'], labels, 'Spearman Correlation', folder_path)
+# plot_results(results['r_squared'], labels, 'R-squared Values', folder_path)

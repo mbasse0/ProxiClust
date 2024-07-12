@@ -1138,15 +1138,18 @@ def plot_results(datasets, labels, title, folder_path):
     # Ensure that datasets and labels are of the same length
     if len(datasets) != len(labels):
         raise ValueError("Number of datasets and labels must match")
-
+    means = []
+    stds = []
     for data, label in zip(datasets, labels):
         mean_values = np.mean(data, axis=0)
         std_dev = np.std(data, axis=0)
         cycles = np.arange(len(mean_values))
-        plt.errorbar(cycles, mean_values, yerr=std_dev, fmt='-o', label=label, alpha=0.7)
-
-    plt.xlabel('Number of Sampling Cycles')
-    plt.ylabel(title)
+        means.append(mean_values)
+        stds.append(std_dev)
+        # plt.errorbar(cycles, mean_values, yerr=std_dev, fmt='-o', label=label, alpha=0.7)
+    plt.barplot(cycles, means, yerr=stds, labels=labels)
+    # plt.xlabel('Number of Sampling Cycles')
+    # plt.ylabel(title)
     plt.title(f'{title} over Sampling Cycles for {antibody} ({dataset_path} dataset)')
     plt.legend()
     plt.grid(True)
@@ -1446,9 +1449,10 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         for i, data in enumerate(results[key]):
             np.save(f'{folder_path}/all_{key}_{i+1}.npy', np.array(data))
 
-    plot_indiv_results(results['pearson'], labels, 'All Pearson Correlation', folder_path)
-    plot_indiv_results(results['spearman'], labels, 'All Spearman Correlation', folder_path)
-    plot_indiv_results(results['r_squared'], labels, ' All R-squared Values', folder_path)
+    print("Results at the end", results)
+    # plot_indiv_results(results['pearson'], labels, 'All Pearson Correlation', folder_path)
+    # plot_indiv_results(results['spearman'], labels, 'All Spearman Correlation', folder_path)
+    # plot_indiv_results(results['r_squared'], labels, ' All R-squared Values', folder_path)
 
     print("Plotting results")
     plot_results(results['pearson'], labels, 'Pearson Correlation', folder_path)
