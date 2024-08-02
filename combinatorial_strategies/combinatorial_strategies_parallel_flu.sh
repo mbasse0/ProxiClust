@@ -1,12 +1,12 @@
 #!/bin/bash
 
-#SBATCH --job-name=subsets_desai              # Job name
+#SBATCH --job-name=combinatorial_strategies_parallel_flu              # Job name
 #SBATCH --nodes=1                           # Number of nodes
 #SBATCH --ntasks-per-node=112   # Number of cores per node
-#SBATCH --mem=512G                           # Memory per node
-#SBATCH --time=23:00:00                     # Time limit
-#SBATCH --output=./logs/subsets_desai.%j.out  # Standard output log
-#SBATCH --error=./logs/subsets_desai.%j.err   # Standard error log
+#SBATCH --mem=256G                           # Memory per node
+#SBATCH --time=12:00:00                     # Time limit
+#SBATCH --output=./logs/combinatorial_strategies_parallel_flu.%j.out  # Standard output log
+#SBATCH --error=./logs/combinatorial_strategies_parallel_flu.%j.err   # Standard error log
 #SBATCH --partition=sapphire                # Partition name, if applicable
 
 # Loading the environment or modules necessary for running the script
@@ -19,4 +19,4 @@ echo "Using Python version:"
 srun python --version
 
 # Execute the Python script with command-line arguments passed to this script
-python subsets_desai.py
+python combinatorial_strategies/combinatorial_strategies_parallel_flu.py

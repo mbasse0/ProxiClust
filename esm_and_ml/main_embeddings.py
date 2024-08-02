@@ -62,7 +62,9 @@ now = datetime.datetime.now()
 timestamp = now.strftime("%Y%m%d_%H%M")
 file_names = f'{timestamp}_{decoder_type}_pearson_{n_layers_trained}layers_trained_{round((1-prop_test)*n_samples)}train_samples_{n_epochs}epochs_{batch_size}batch_size_{decoder_lr}decoder_lr_{base_lr}base_lr_{antibody}'
 
-folder_path = f'runs/{file_names}'
+
+print(file_names)
+folder_path = f'./runs/{file_names}'
 # Check if the directory exists, and if not, create it
 if not os.path.exists(folder_path):
     os.makedirs(folder_path)
@@ -90,18 +92,20 @@ print('Create the model')
 #     print("Unknown decoder type")
 
 
-model = EmbeddingESMWithMLP(device=device, decoder_input_dim=1280).to(device) 
+# model = ESMWithMLP(device=device, decoder_input_dim=1280).to(device) 
+model = ESMWithCNN(device=device, input_dim=1280).to(device)
+
 
 # Load the model trained on desai old (no finetuning)
-model_path = "models/20240517_0919_mlp_pearson_1layers_trained_7200train_samples_10epochs_4batch_size_0.001decoder_lr_1e-05base_lr_log10Kd_REGN10987_model_save"
-model.load_state_dict(torch.load(model_path + '.pt'))
-print("with the loaded model")
-# print(folder_path)
+# model_path = "./models/20240722_1005_mlp_pearson_0layers_trained_5000train_samples_20epochs_8batch_size_0.001decoder_lr_0.0001base_lr_log10Kd_REGN10987_model_save"
+# model.load_state_dict(torch.load(model_path + '.pt'))
+# print("with the loaded model")
+print(folder_path)
 
 print('Load the Desai dataset')
 # Load the dataset
-# df = pd.read_csv('df_Desai_15loci_complete.csv')
-df = pd.read_csv('df_desai_new.csv')
+df = pd.read_csv('./datasets/df_Desai_15loci_complete.csv')
+# df = pd.read_csv('./datasets/df_desai_new.csv')
 # TEMPORARY crop the dataset for faster runtime
 df = df.sample(n=n_samples, random_state=42)
 #save the cropped dataset
@@ -112,8 +116,8 @@ df.drop(columns=['Unnamed: 0'])
 sequences = df["mutant_sequence"].tolist()
 
 
-# targets = df['log10Kd_ACE2'].values
-targets_original = df['new_log10Kd_REGN10987'].values
+targets = df['log10Kd_ACE2'].values
+# targets_original = df['new_log10Kd_REGN10987'].values
 
 import numpy as np
 
@@ -125,60 +129,12 @@ def normalize_targets(targets):
     return targets_normalized
 
 # Apply normalization
-targets = normalize_targets(targets_original)
+# targets = normalize_targets(targets_original)
 
 # targets = df['log10Kd_ACE2', 'log10Kd_CB6', 'log10Kd_CoV555', 'log10Kd_REGN10987', 'log10Kd_S309'].values
 
 esm = AutoModelForMaskedLM.from_pretrained('models').to(device)
 tokenizer = AutoTokenizer.from_pretrained('models')
-
-# def train_test_split_dissimilarity(sequences, targets, test_size=0.2, random_state=None, distance_metric='hamming'):
-#     if random_state:
-#         np.random.seed(random_state)
-#     #Randomly choose the first index
-#     first_ind = np.random.randint(0, len(sequences))
-#     train_indices = [first_ind]
-#     remaining_sequences = sequences.tolist()
-#     remaining_sequences.pop(first_ind)
-#     n_test = int(test_size * len(sequences))
-#     n_train = len(sequences) - n_test
-#     distances = np.zeros(len(sequences))
-#     for i in range(n_train):
-#         print("iteration", i, "out of", n_train)
-#         if distance_metric=='hamming':
-#             for j,seq in enumerate(sequences):
-#                 if seq in remaining_sequences:
-#                     distances[j] = distance.hamming(seq, WILDTYPE)
-#                 else:
-#                     distances[j] = 0
-#         else:
-#             max_dist = 0
-#             max_ind = 0
-#             for j,seq in enumerate(remaining_sequences):
-#                 for ind in train_indices:
-#                     dist = np.array(np.linalg.norm.distance(seq, WILDTYPE))
-#                     if dist > max_dist:
-#                         max_dist = dist
-#                         max_ind = j
-#             remaining_sequences.pop(j)
-#             # train
-        
-#                 else:
-#                     distances[j] = 0
-#        # Find the index of the maximum distance
-#         max_index = np.argmax(distances)
-    
-#         # Append the index of the sequence with the maximum distance
-#         train_indices.append(max_index)
-#         remaining_sequences.pop(max_index)
- 
-    # test_indices = [i for i in range(len(sequences)) if i not in train_indices]
-    # sequences_train = [sequences[i] for i in train_indices]
-    # sequences_test = [sequences[i] for i in test_indices]
-    # targets_train = targets[train_indices]
-    # targets_test = targets[test_indices]
-    # return sequences_train, sequences_test, targets_train, targets_test 
-
 
 # Compute the wildtype embedding
 WILDTYPE = 'NITNLCPFGEVFNATRFASVYAWNRKRISNCVADYSVLYNSASFSTFKCYGVSPTKLNDLCFTNVYADSFVIRGDEVRQIAPGQTGKIADYNYKLPDDFTGCVIAWNSNNLDSKVGGNYNYLYRLFRKSNLKPFERDISTEIYQAGSTPCNGVEGFNCYFPLQSYGFQPTNGVGYQPYRVVVLSFELLHAPATVCGPKKST'
@@ -224,70 +180,50 @@ def batch_process_embeddings(sequences, batch_size=4):
 
 # Tokenize the training and validation sequences
 
-embeddings = batch_process_embeddings(sequences)
+# embeddings = batch_process_embeddings(sequences)
 
 
 
-def train_test_split_smart(sequences, targets, test_size=0.2, random_state=None):
-    if random_state:
-        np.random.seed(random_state)
-    
-    # Calculate distances from each sequence embedding to the wildtype embedding
-    distances = np.array([np.linalg.norm(seq - wildtype_embedding) for seq in sequences])
-    
-    # Get indices sorted by distance (ascending)
-    sorted_indices = np.argsort(distances)
-    
-    # Determine the number of test samples
-    n_test = int(test_size * len(sequences))
-    n_train = len(sequences)-n_test
-    # Split the indices into train and test
-    # train_indices = sorted_indices[:n_train]  # Train on sequences more similar to wildtype
-    # test_indices = sorted_indices[n_train:]   # Test on sequences less similar to wildtype
-    
-    train_indices = sorted_indices[n_test:]  # Train on sequences less similar to wildtype
-    test_indices = sorted_indices[:n_test]   # Test on sequences more similar to wildtype
-    
+def freeze_esm_layers(model, n_layers_to_freeze):
+    for name, param in model.named_parameters():
+        if 'encoder.layer' in name:
+            layer_num = int(name.split('.')[3])
+            if layer_num < 32 +1 - n_layers_to_freeze:
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+        else:
+            param.requires_grad = True
 
-    sequences_train = [sequences[i] for i in train_indices]
-    sequences_test = [sequences[i] for i in test_indices]
-    targets_train = targets[train_indices]
-    targets_test = targets[test_indices]
-    return sequences_train, sequences_test, targets_train, targets_test
+            
+# Choose which parameters to freeze in ESM
+freeze_esm_layers(model.esm, n_layers_trained) 
+
+
+
+for name, param in model.named_parameters():
+    if param.requires_grad:
+        print(f"Training: {name}")
 
 # Split the dataset into training and validation sets
-embeddings_train, embeddings_val, targets_train, targets_val = train_test_split_smart(embeddings, targets, test_size=prop_test, random_state=42)
-
-
-# # Save the embeddings
-# torch.save(embeddings_train, f'embeddings_train_{n_samples}.pt')
-# torch.save(embeddings_val, f'embeddings_val_{n_samples}.pt')
-
-# Load the embeddings
-# embeddings_train = torch.load(f'embeddings_train_{n_samples}.pt')
-# embeddings_val = torch.load(f'embeddings_val_{n_samples}.pt')
-
-
-# Quick plot of the target values
-
-# Plot the first 50 affinity values from the training set as a 1D scatter plot on the x-axis
-plt.figure(figsize=(10, 2))  # Narrow figure height as we only need one horizontal line
-y_zeros = [0] * 50  # Create a list of zeros for the y-axis values
-plt.scatter(targets_train[:50], y_zeros, marker='o', color='b')  # Use scatter to plot points on the x-axis
-plt.title('Affinity Values Distribution of the First 50 Sequences in Training Set')
-plt.xlabel('log10Kd_ACE2')
-plt.yticks([])  # Hide y-axis ticks as they are not needed
-plt.grid(True, axis='x')  # Grid only along x-axis
-plt.savefig(folder_path+'/training_set_affinities_1D_horizontal.png')  # Save the plot to a file
-
+# embeddings_train, embeddings_val, targets_train, targets_val = train_test_split(embeddings, targets, test_size=prop_test, random_state=42)
+sequences_train, sequences_val, targets_train, targets_val = train_test_split(sequences, targets, test_size=prop_test, random_state=42)
 
 
 
 print('Create datasets and dataloaders')
 # Training and validation datasets
+def preprocess_sequence(seq):
+    # This is a placeholder function to convert sequence strings to tensor.
+    # Implement your specific sequence preprocessing here.
+    # Example: Convert each character to an integer or one-hot encoded tensor.
+    return torch.tensor([ord(c) - ord('A') for c in seq], dtype=torch.float32)  # Simplistic example
 
-train_dataset = SequenceDataset(embeddings_train, targets_train, device)
-test_dataset = SequenceDataset(embeddings_val, targets_val, device)
+preprocess_train = [preprocess_sequence(seq).to(device) for seq in sequences_train]  
+preprocess_val = [preprocess_sequence(seq).to(device) for seq in sequences_val]  
+
+train_dataset = SequenceDataset(preprocess_train, targets_train, device)
+test_dataset = SequenceDataset(preprocess_val, targets_val, device)
 
 # Training and validation dataloaders
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -296,24 +232,15 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 # Loss function and optimizer
 criterion = nn.MSELoss()
 # Applying different learning rates
-
-if decoder_type=="cnn+classifier":
-    optimizer = torch.optim.Adam([
-    {'params': model.regression_head.parameters(), 'lr': decoder_lr},
-    {'params': model.classification_head.parameters(), 'lr': 1E-2}
-])
-elif decoder_type == "hybrid":
-    optimizer = torch.optim.Adam([
-    {'params': model.regression_head.parameters(), 'lr': decoder_lr},
-    {'params': model.classification_head.parameters(), 'lr': 1E-2},
-    {'params': [p for p in model.esm.parameters() if p.requires_grad], 'lr': base_lr}
-])
-else:    
-    optimizer = torch.optim.Adam([
-    {'params': model.decoder.parameters(), 'lr': decoder_lr}
-])
+ 
 
 
+optimizer = torch.optim.Adam([
+{'params': model.decoder.parameters(), 'lr': decoder_lr},
+{'params': [p for p in model.esm.parameters() if p.requires_grad], 'lr': base_lr}
+])
+
+    
 print('Begin training')
 # Training loop
 def train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=5, plot_loss=False):

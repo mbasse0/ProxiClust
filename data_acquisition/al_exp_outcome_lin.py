@@ -11,7 +11,6 @@ import numpy as np
 from sklearn.metrics import r2_score
 import os
 import datetime
-from gaussian_process import gp_predictor_sklearn
 from tqdm import tqdm
 from sklearn.gaussian_process.kernels import RationalQuadratic
 import random
@@ -24,16 +23,15 @@ from scipy.spatial.distance import cosine
 from sklearn.linear_model import LinearRegression
 from multiprocessing import Pool
 import multiprocessing
+import time
+
+start_time = time.time()
 
 
 
 
 # Current date and time
 now = datetime.datetime.now()
-
-# Format datetime in YYYYMMDD_HHMMSS format
-timestamp = now.strftime("%Y%m%d_%H%M%S")
-file_names = f'{timestamp}_al_gp'
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -58,7 +56,7 @@ print('Load the dataset')
 
 # dataset_path = 'df_bloom_complete.csv'
 # dataset_path = 'df_desai_new_full.csv'
-dataset_path = "df_desai_old_full.csv"
+dataset_path = "./datasets/df_desai_old_full.csv"
 
 dataset_name = dataset_path.split(".")[0]
 # dataset_path = 'df_Desai_15loci_complete.csv'
@@ -83,18 +81,20 @@ antibody = 'log10Kd_ACE2'
 print("antibody", antibody)
 targets_original = df[antibody].values
 
+elapsed_time = time.time() - start_time
 
-print("Done loading the dataset")
+# Display the elapsed time
+print(f"Time taken to load the dataset: {elapsed_time:.2f} seconds")
 
 # full_embeddings = torch.tensor(df['mean_representation'].apply(json.loads))
 df["onehot"] = df["onehot"].apply(lambda x: [int(i) for i in x.replace('[','').replace(']','').split(', ')])
 df["mean_representation"] = df["mean_representation"].apply(lambda x: [float(i) for i in x.replace('[','').replace(']','').split(', ')])
 full_embeddings = torch.tensor(df["mean_representation"].tolist())
 
-print("Onehot elements of df", df['onehot'][0])
-
 pca = PCA(n_components=20)
 embeddings = pca.fit_transform(full_embeddings)
+
+print(f"Computed embeddings dim 20, {time.time() - start_time:.2f}")
 
 # Normalize function
 def normalize_targets(targets):
@@ -108,32 +108,6 @@ targets = normalize_targets(targets_original)
 
 esm = AutoModelForMaskedLM.from_pretrained('models').to(device)
 tokenizer = AutoTokenizer.from_pretrained('models')
-
-
-def batch_process_embeddings(sequences, batch_size=16):
-    # Create DataLoader
-    dataset = sequences
-    loader = DataLoader(dataset, batch_size=batch_size)
-
-    # Collect all embeddings
-    all_embeddings = []
-    for batch in tqdm(loader):
-        input_ids, attention_mask = tokenizer(batch, return_tensors='pt', padding='longest', truncation=True, max_length=512).values()
-        input_ids = input_ids.to(device)
-        attention_mask = attention_mask.to(device)
-
-        outputs = esm(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
-        hidden_states = outputs.hidden_states[-1]
-        mask_expanded = attention_mask.unsqueeze(-1).expand_as(hidden_states).float()
-        sum_hidden_states = torch.sum(hidden_states * mask_expanded, dim=1)
-        sum_mask = mask_expanded.sum(dim=1)
-        pooled_hidden_states = sum_hidden_states / sum_mask
-        all_embeddings.append(pooled_hidden_states.detach().cpu())
-
-
-    # Concatenate all embeddings
-    all_embeddings = torch.cat(all_embeddings, dim=0)
-    return all_embeddings
 
 # Test the mlp model with Pearson correlation
 def evaluate_model(model, unlabelled_idx, labels):
@@ -245,99 +219,6 @@ def plot_tsne_clusters(sequences, initial_idx, labelled_idx, unlabelled_idx, sav
     return clusters
 
 
-def al_uncertain(gp, unlabelled_seq, unlabelled_idx, n_new, normalize_mean):
-    pred = gp.predict(unlabelled_seq, what=("mean", "mse"))
-    means = np.squeeze(pred["mean"])
-    variances = np.squeeze(pred["mse"])
-    if normalize_mean:
-        ratios = means/np.sqrt(variances)
-        samples_idx = np.argsort(-ratios)[:n_new]
-    else:
-        samples_idx = np.argsort(-variances)[:n_new]
-    original_idx = [unlabelled_idx[i] for i in samples_idx]
-    return original_idx
-
-def get_uncertain(sequences, targets, cycles, samples_per_cycle, normalize_mean , folder_path, init_size=10, plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-    
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        new_idx = al_uncertain(gp, unlabelled_seq, unlabelled_idx, samples_per_cycle, normalize_mean)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, unlabelled_idx, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_uncertain_{normalize_mean}version_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/uncertain_tsne_{normalize_mean}version_{j}.png')    
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-def al_min_values(gp, unlabelled_seq, unlabelled_idx, n_new):
-    pred = gp.predict(unlabelled_seq, what=("mean", "mse"))
-    means = np.squeeze(pred["mean"])
-    samples_idx = np.argsort(means)[:n_new]
-    original_idx = [unlabelled_idx[i] for i in samples_idx]
-    return original_idx
-
-def evaluate_escape_detection(sequences, targets, labelled_idx):
-    escape_threshold = 5.1
-    mutants_escape = [t < escape_threshold for t in targets]
-    labelled_mutants_escape = [mutants_escape[i] for i in labelled_idx]
-
-    return np.sum(labelled_mutants_escape)/np.sum(mutants_escape)
-
-def get_min_values(sequences, targets, cycles, samples_per_cycle, folder_path, init_size=10 , plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        new_idx = al_min_values(gp, unlabelled_seq, unlabelled_idx, samples_per_cycle)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_max_mean_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/min_tsne_{j}.png')
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-
-
 def get_from_tsne(sequences, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
     new_seq = np.array([sequences[i] for i in init_indices])
@@ -433,17 +314,13 @@ def hamming_distance(s1, s2):
 def get_diverse(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10, plot_corr=False):
     # Initialize with a random sequence
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
     labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
     pearson_corrs = []
     spearman_corrs = []
     rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
     for j in range(cycles):
-        gp.add(new_seq, new_targets)
         # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
         labelled_sequences = [sequences_str[i] for i in labelled_idx]
         
@@ -460,8 +337,6 @@ def get_diverse(sequences, sequences_str, targets, cycles, samples_per_cycle, fo
             sorted_indices = np.argsort(-np.array(distances))
 
         new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
 
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
@@ -487,180 +362,16 @@ def get_diverse(sequences, sequences_str, targets, cycles, samples_per_cycle, fo
 
 
 
-def get_diverse2(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10, plot_corr=False):
-    # Initialize with a random sequence
+def get_diverse_embeddings(sequences, targets, cycles, samples_per_cycle, folder_path, selection_criterion='min_linkage', init_size=10,plot_corr=False):
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-
-        pred = gp.predict(unlabelled_seq, what=("mean", "mse"))
-        variances = np.squeeze(pred["mse"])
-        hamming_distances = [np.min([hamming_distance(sequences_str[idx], seq) for seq in labelled_sequences]) for idx in unlabelled_idx]
-
-        scores = np.array(hamming_distances)*np.sqrt(variances)
-        sorted_indices = np.argsort(-scores)
-        # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
-        labelled_sequences = [sequences_str[i] for i in labelled_idx]
-
-
-        new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse2_{selection_criterion}_cycle_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse2_tsne_{selection_criterion}_cycle_{j}.png')
-
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-
-def get_diverse3(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10, plot_corr=False):
-    contact_indices = np.load('pos_mut_article.npy')
-    # Initialize with a random sequence
-    init_indices = np.random.choice(contact_indices, size=init_size, replace=False)
-    
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [el for el in contact_indices if el not in labelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
-        labelled_sequences = [sequences_str[i] for i in labelled_idx]
-        
-        if selection_criterion == 'largest_mean':
-            distances = [np.mean([hamming_distance(sequences_str[idx], seq) for seq in labelled_sequences]) for idx in unlabelled_idx]
-            sorted_indices = np.argsort(-np.array(distances))
-        elif selection_criterion == 'min_linkage':
-            # Get the highest minimum distance for min linkage
-            distances = [np.min([hamming_distance(sequences_str[idx], seq) for seq in labelled_sequences]) for idx in unlabelled_idx]
-            sorted_indices = np.argsort(-np.array(distances))
-        elif selection_criterion == 'max_linkage':
-            # Get the highest maximum distance for max linkage
-            distances = [np.max([hamming_distance(sequences_str[idx], seq) for seq in labelled_sequences]) for idx in unlabelled_idx]
-            sorted_indices = np.argsort(-np.array(distances))
-
-        new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [el for el in contact_indices if el not in labelled_idx]
-        remaining_seq = [sequences[i] for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_targets = [targets[i] for i in range(len(sequences)) if i not in labelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
-    print("Train data after all cycles", len(gp.x_train))
-
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse3_{selection_criterion}_cycle_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse3_tsne_{selection_criterion}_cycle_{j}.png')
-
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-
-def custom_distance(s1, s2, dict):
-    dist = 0
-    for i in range(len(s1)):
-        if s1[i] != s2[i]:
-            if i in dict:
-                dist += dict[i]
-            else:
-                dist += 1
-    return dist
-
-def get_diverse4(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10, plot_corr=False):
-    # Initialize with a random sequence
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
     labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
     pearson_corrs = []
     spearman_corrs = []
     rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    delta_g_dict = np.load('delta_g_dict.npy', allow_pickle=True).item()
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
-        labelled_sequences = [sequences_str[i] for i in labelled_idx]
-        
-        if selection_criterion == 'largest_mean':
-            distances = [np.min([custom_distance(sequences_str[idx], seq, delta_g_dict) for seq in labelled_sequences]) for idx in unlabelled_idx] 
-            sorted_indices = np.argsort(-np.array(distances))
-        elif selection_criterion == 'min_linkage':
-            # Get the highest minimum distance for min linkage
-            distances = [np.min([custom_distance(sequences_str[idx], seq, delta_g_dict) for seq in labelled_sequences]) for idx in unlabelled_idx] 
-            sorted_indices = np.argsort(-np.array(distances))
-        elif selection_criterion == 'max_linkage':
-            # Get the highest maximum distance for max linkage
-            distances = [np.min([custom_distance(sequences_str[idx], seq, delta_g_dict) for seq in labelled_sequences]) for idx in unlabelled_idx] 
-            sorted_indices = np.argsort(-np.array(distances))
-        new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
-    print("Train data after all cycles", len(gp.x_train))
-
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse4_{selection_criterion}_cycle_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse4_tsne_{selection_criterion}_cycle_{j}.png')
-
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-
-
-def get_diverse_embeddings(sequences, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10,plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
     for j in range(cycles):
-        gp.add(new_seq, new_targets)
         # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
-        mean_distances = []
         labelled_sequences = [sequences[i] for i in labelled_idx]
         
         # Find the indices of the unlabelled sequences with the largest mean distances
@@ -677,39 +388,39 @@ def get_diverse_embeddings(sequences, targets, cycles, samples_per_cycle, folder
             sorted_indices = np.argsort(-np.array(distances))
 
         new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse_embed_{selection_criterion}_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse_emb_tsne_{selection_criterion}_{j}.png')
 
-    # plot_al(pearson_corrs, spearman_corrs, rsquared_vals, folder_path+f'/al_random_sampling_{n_samples}samples_{cycles}cycles_{samples_per_cycle}samples_per_cycle.png', cycles)
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
+    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
+
+    X_train = np.array([df.iloc[i]['onehot'] for i in labelled_idx])
+    y_train = np.array([targets[i] for i in labelled_idx])
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(model, unlabelled_idx, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
+    print("Train data after all cycles", len(X_train))
+
+    if plot_corr:
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse_embedding_{selection_criterion}_cycle_{j}.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse_embedding_tsne_{selection_criterion}_cycle_{j}.png')
+
+    return pearson_corrs, spearman_corrs, rsquared_vals, model, labelled_idx, unlabelled_idx
 
 def get_diverse_embeddings_cosine(sequences, targets, cycles, samples_per_cycle, folder_path, selection_criterion='largest_mean', init_size=10, plot_corr=False):
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
     labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
     pearson_corrs = []
     spearman_corrs = []
     rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
     for j in range(cycles):
-        gp.add(new_seq, new_targets)
         # Calculate mean cosine distances from each unlabelled sequence to the labelled sequences
-        mean_distances = []
         labelled_sequences = [sequences[i] for i in labelled_idx]
         
         # Find the indices of the unlabelled sequences with the largest mean distances
@@ -726,219 +437,30 @@ def get_diverse_embeddings_cosine(sequences, targets, cycles, samples_per_cycle,
             sorted_indices = np.argsort(-np.array(distances))
 
         new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
         labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
     
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse_embed_cosine_{selection_criterion}_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse_emb_cosine_tsne_{selection_criterion}_{j}.png')
-
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-
-def get_delta_alpha(y_prime, k, alpha, var_f, K_inv):
-    prefactor = ( y_prime-np.dot(k, alpha) )/var_f
-    array = np.append(np.dot(K_inv, k), -prefactor)
-    return array
-
-
-def approx_prob(gp, y_prime, x_prime, sig_f):
-    results = gp.predict(x_prime, what=("mean"))
-    f = results["mean"]
-    z = erf(-f/(np.sqrt(2)*sig_f))
-    if y_prime == 1:
-        return 1/2 - z/2
-    else:
-        return 1/2 + z/2
-
-def get_pde_score(gp, x_prime, sig_f, all_X):
-    Y = gp.y_train
-    X = gp.x_train
-    kernel = gp.kernel
-    n = len(X)
-
-    N = len(all_X)
-
-    preds = gp.predict(x_prime, what=("mean", "mse"))
-    y_pred = preds["mean"]
-    y_var = preds["mse"]
-    # prob_1 = approx_prob(gp, 1, x_prime, sig_f)
-    k = kernel._calc_distance(x_prime, X).squeeze(0)
-    K_inv = gp.inv_cov_matrix
-    alpha = np.dot(K_inv, Y)
-    delta_alpha = get_delta_alpha(y_pred, k, alpha, y_var, K_inv)
-    # new_X = np.vstack((X, x_prime))
-    pde = np.sum(kernel._calc_distance(x_prime, all_X).squeeze(0))
-    score =  np.linalg.norm(delta_alpha, ord=1) * pde
-
-    return score
-
-
-
-def al_pde_values(gp, unlabelled_seq, sequences, unlabelled_idx, n_new):
-    
-    op_emoc_scores = [-get_pde_score(gp, np.array([el]), 0.1, sequences) for el in unlabelled_seq]
-
-    # print("the emoc scores", len(emoc_scores), emoc_scores)
-    samples_idx = np.argsort(op_emoc_scores)[:n_new]
-    original_idx = [unlabelled_idx[i] for i in samples_idx]
-    return original_idx
-
-
-def get_pde(sequences, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
 
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        new_idx = al_pde_values(gp, unlabelled_seq, sequences, unlabelled_idx, samples_per_cycle)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
+    X_train = np.array([df.iloc[i]['onehot'] for i in labelled_idx])
+    y_train = np.array([targets[i] for i in labelled_idx])
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(model, unlabelled_idx, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
+    print("Train data after all cycles", len(X_train))
+
     if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_random_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/pde_tsne_{j}.png')
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_diverse_embedding_cosine_{selection_criterion}_cycle_{j}.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse_embedding_cosine_tsne_{selection_criterion}_cycle_{j}.png')
+
+    return pearson_corrs, spearman_corrs, rsquared_vals, model, labelled_idx, unlabelled_idx
 
 
-
-def get_emoc_score(gp, x_prime, sig_f, all_X):
-    Y = gp.y_train
-    X = gp.x_train
-    kernel = gp.kernel
-    n = len(X)
-
-    N = len(all_X)
-
-    preds = gp.predict(x_prime, what=("mean", "mse"))
-    y_pred = preds["mean"]
-    y_var = preds["mse"]
-    # prob_1 = approx_prob(gp, 1, x_prime, sig_f)
-    k = kernel._calc_distance(x_prime, X).squeeze(0)
-    K_inv = gp.inv_cov_matrix
-    alpha = np.dot(K_inv, Y)
-    delta_alpha = get_delta_alpha(y_pred, k, alpha, y_var, K_inv)
-    # new_X = np.vstack((X, x_prime))
-    res = 0
-    for i in range(len(delta_alpha)):
-        if i == len(delta_alpha)-1:
-            dist = kernel._calc_distance(x_prime, all_X).squeeze(0)
-        else:
-            dist = kernel._calc_distance(np.array([X[i]]), all_X).squeeze(0)
-        res += abs(delta_alpha[i]) * np.sum(dist)
-    pde = np.sum(kernel._calc_distance(x_prime, all_X).squeeze(0))
-    score =  np.linalg.norm(delta_alpha, ord=1) * pde
-
-    return score
-
-def al_emoc_values(gp, unlabelled_seq, sequences, unlabelled_idx, n_new):
-    
-    op_emoc_scores = [-get_emoc_score(gp, np.array([el]), 0.1, sequences) for el in unlabelled_seq]
-
-    # print("the emoc scores", len(emoc_scores), emoc_scores)
-    samples_idx = np.argsort(op_emoc_scores)[:n_new]
-    original_idx = [unlabelled_idx[i] for i in samples_idx]
-    return original_idx
-
-def get_fast_emoc(sequences, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        new_idx = al_emoc_values(gp, unlabelled_seq, sequences, unlabelled_idx, samples_per_cycle)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_emoc_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/emoc_tsne_{j}.png')
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
-
-def get_best_emoc(sequences, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
-    labelled_idx = list(init_indices)
-    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-    unlabelled_seq = [sequences[i] for i in unlabelled_idx]
-    pearson_corrs = []
-    spearman_corrs = []
-    rsquared_vals = []
-
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
-    
-    for j in range(cycles):
-        gp.add(new_seq, new_targets)
-        best_score = 0
-        new_idx = 0
-        for idx in unlabelled_idx:
-            new_seq = np.array([sequences[idx]])
-            new_targets = np.expand_dims([targets[idx]], axis=1)
-            remaining_seq = [sequences[i] for i in unlabelled_idx if i != idx]
-            remaining_targets = [targets[i] for i in unlabelled_idx if i != idx]
-
-            gp_copy = gp.copy()
-            gp_copy.add(new_seq, new_targets)
-            predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp_copy, new_seq, new_targets)
-            if r_squared > best_score:
-                best_score = r_squared
-                new_idx = idx
-
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
-        labelled_idx.extend(new_idx)
-        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    if plot_corr:
-        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_best_emoc_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/best_emoc_tsne_{j}.png')
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
 
 def get_subset_combinatorial(df, indices, from_variant='wt'):
     if dataset_name=='df_desai_new_full':
@@ -1026,13 +548,21 @@ def get_ucb(sequences, sequences_str, targets, clusters, cluster_weights, alpha,
 
     for k in range(cycles):        
         labelled_sequences = [sequences_str[i] for i in labelled_idx]
+        unlabeled_sequences = [sequences_str[i] for i in unlabelled_idx]
+
+        labelled_emb = np.array([sequences[i] for i in labelled_idx])
+        unlabelled_emb = np.array([sequences[i] for i in unlabelled_idx])
         scores = {}
-        for cluster in clusters:
-            for el in clusters[cluster]:
-                scores[el] = cluster_weights[cluster]            
-        
+
+        kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(labelled_emb)
+        log_dens = kde.score_samples(unlabelled_emb)
+        for i in range(len(log_dens)):
+            scores[unlabelled_idx[i]] = log_dens[i]
+
+        print("Scores", scores)        
         # Get the highest minimum distance for min linkage
         distances = [np.min([hamming_distance(sequences_str[idx], seq) for seq in labelled_sequences]) for idx in unlabelled_idx]
+        print("Distances", distances)
         for j, idx in enumerate(unlabelled_idx):
             add_score = alpha*distances[j]
             if idx in scores:   
@@ -1187,19 +717,30 @@ def plot_results(datasets, title, folder_path):
 from sklearn.neighbors import KernelDensity
 
 
-def sample_sparse(sequences, unlabelled_idx, labelled_seq, samples_per_cycle):
+def sample_sparse(sequences, unlabelled_idx, labelled_idx, samples_per_cycle):
     # Get a sequence in unlabelled sequence in the most sparse region. Estimate density with a kernel density estimator
     unlabelled_sequences = np.array([sequences[i] for i in unlabelled_idx])
-    kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(unlabelled_sequences)
+    labelled_sequences = np.array([sequences[i] for i in labelled_idx])
+
+    kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(labelled_sequences)
     log_dens = kde.score_samples(unlabelled_sequences)
     sorted_indices = np.argsort(log_dens)
     return [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
 
+def sample_dense(sequences, unlabelled_idx, labelled_idx, samples_per_cycle):
+    # Get a sequence in unlabelled sequence in the most sparse region. Estimate density with a kernel density estimator
+    unlabelled_sequences = np.array([sequences[i] for i in unlabelled_idx])
+    labelled_sequences = np.array([sequences[i] for i in labelled_idx])
 
-def sample_sparse_away(sequences, unlabelled_idx, labelled_sequences, samples_per_cycle):
+    kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(labelled_sequences)
+    log_dens = kde.score_samples(unlabelled_sequences)
+    sorted_indices = np.argsort(-log_dens)
+    return [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
+
+def sample_sparse_away(sequences, unlabelled_idx, labelled_seq, samples_per_cycle):
     # Convert sequences to NumPy arrays for distance calculation
     unlabelled_sequences = np.array([sequences[i] for i in unlabelled_idx])
-    labelled_sequences = np.array(labelled_sequences)
+    labelled_sequences = np.array([sequences[i] for i in labelled_idx])
     
     # Estimate density with a kernel density estimator
     kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(unlabelled_sequences)
@@ -1222,41 +763,76 @@ def sample_sparse_away(sequences, unlabelled_idx, labelled_sequences, samples_pe
     return [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
 
 def get_sparse(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
-    # Initialize with a random sequence
     init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
-    new_seq = np.array([sequences[i] for i in init_indices])
-    new_targets = np.expand_dims([targets[i] for i in init_indices], axis=1)
     labelled_idx = list(init_indices)
     unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
     pearson_corrs = []
     spearman_corrs = []
     rsquared_vals = []
-    gp = OnlineGP(SquaredExponentialKernel(0.5), noise_var=0.1)
     
     for j in range(cycles):
-        gp.add(new_seq, new_targets)
         # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
-        labelled_sequences = [sequences[i] for i in labelled_idx]
-        # new_idx = [unlabelled_idx[i] for i in sorted_indices[:samples_per_cycle]]
-        new_idx = sample_sparse_away(sequences, unlabelled_idx, labelled_sequences, samples_per_cycle)
-        new_seq = np.array([sequences[i] for i in new_idx])
-        new_targets = np.expand_dims([targets[i] for i in new_idx], axis=1)
+        # labelled_sequences = [sequences_str[i] for i in labelled_idx]
+        new_idx = sample_sparse(sequences, unlabelled_idx, labelled_idx, samples_per_cycle)
         labelled_idx.extend(new_idx)
         unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
-        remaining_seq = [sequences[i] for i in unlabelled_idx]
-        remaining_targets = [targets[i] for i in unlabelled_idx]
-        predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(gp, remaining_seq, remaining_targets)
-        pearson_corrs.append(pearson_corr)
-        spearman_corrs.append(spearman_corr)
-        rsquared_vals.append(r_squared)
-    
-    print("Train data after all cycles", len(gp.x_train))
+
+    X_train = np.array([df.iloc[i]['onehot'] for i in labelled_idx])
+    y_train = np.array([targets[i] for i in labelled_idx])
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(model, unlabelled_idx, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
+    print("Train data after all cycles", len(X_train))
 
     if plot_corr:
         plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_sparse_cycle_{j}.png')
-        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/diverse_sparse_cycle_{j}.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/sparse_tsne_cycle_{j}.png')
 
-    return pearson_corrs, spearman_corrs, rsquared_vals, gp, labelled_idx, unlabelled_idx
+    return pearson_corrs, spearman_corrs, rsquared_vals, model, labelled_idx, unlabelled_idx
+
+    
+
+def get_dense(sequences, sequences_str, targets, cycles, samples_per_cycle, folder_path, init_size=10, plot_corr=False):
+    init_indices = np.random.choice(len(sequences), size=init_size, replace=False)
+    labelled_idx = list(init_indices)
+    unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
+    pearson_corrs = []
+    spearman_corrs = []
+    rsquared_vals = []
+    
+    for j in range(cycles):
+        # Calculate mean Hamming distances from each unlabelled sequence to the labelled sequences
+        # labelled_sequences = [sequences_str[i] for i in labelled_idx]
+        new_idx = sample_dense(sequences, unlabelled_idx, labelled_idx, samples_per_cycle)
+        labelled_idx.extend(new_idx)
+        unlabelled_idx = [i for i in range(len(sequences)) if i not in labelled_idx]
+
+    X_train = np.array([df.iloc[i]['onehot'] for i in labelled_idx])
+    y_train = np.array([targets[i] for i in labelled_idx])
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+
+    remaining_targets = [targets[i] for i in unlabelled_idx]
+
+    predictions, actuals, pearson_corr, spearman_corr, r_squared = evaluate_model(model, unlabelled_idx, remaining_targets)
+    pearson_corrs.append(pearson_corr)
+    spearman_corrs.append(spearman_corr)
+    rsquared_vals.append(r_squared)
+    print("Train data after all cycles", len(X_train))
+
+    if plot_corr:
+        plot_predictions_vs_actuals(predictions, actuals, pearson_corr, spearman_corr, r_squared, f'{folder_path}/acquisition_dense_cycle_{j}.png')
+        plot_tsne(sequences, init_indices, labelled_idx, unlabelled_idx, save_path=f'{folder_path}/dense_tsne_cycle_{j}.png')
+
+    return pearson_corrs, spearman_corrs, rsquared_vals, model, labelled_idx, unlabelled_idx
+
+    
 
 
 def plot_indiv_results(datasets, title, folder_path):
@@ -1283,13 +859,16 @@ def plot_indiv_results(datasets, title, folder_path):
 
 
 import numpy as np
-def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, run_6=True, run_7=True, run_8= True, run_9=True, run_10=True, run_11=True, runs=5, cycles=10, samples_per_cycle=1, init_size=10, folder_path='runs/folder_unspecified'):
-    
+def run_experiments(args):
+    run_1, run_2, run_3, run_4, run_5, run_6, run_7, run_8, run_9, run_10, run_11, cycles, samples_per_cycle, init_size, folder_path, seed = args
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     # Check if the directory exists, and if not, create it
-    if not os.path.exists(folder_path):
+    try:
         os.makedirs(folder_path)
+    except FileExistsError:
+        pass
     # Set random seed for reproducibility
-    torch.manual_seed(42)
     results = {"pearson": [], "spearman": [], "r_squared": []}
     labels = []
 
@@ -1330,16 +909,23 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         print("Running exp1")
         results1 = get_uncertain(embeddings, targets, cycles, samples_per_cycle, True, folder_path, init_size, plot_corr)
         update_results(results, results1, "Uncertain Acquisition (Normalized)")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     if run_2:
         print("Running exp2")
-        results2 = get_uncertain(embeddings, targets, cycles, samples_per_cycle, False, folder_path, init_size, plot_corr)
-        update_results(results, results2, "Uncertain Acquisition")
+        # results2 = get_uncertain(embeddings, targets, cycles, samples_per_cycle, False, folder_path, init_size, plot_corr)
+        # update_results(results, results2, "Uncertain Acquisition")
+        # print(f"Time is , {time.time() - start_time:.2f}")
+
+        results2 = get_dense(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+        update_results(results, results2, "Dense acquisition")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     if run_3:
         print("Running exp3")
         results3 = get_random(embeddings, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results3, "Random Acquisition")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     if run_4:
         print("Running exp4")
@@ -1347,7 +933,8 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         # update_results(results, results4, "Diverse acquisition (largest mean)")
         results4 = get_from_tsne(embeddings, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results4, "t-SNE Acquisition")
-    
+        print(f"Time is , {time.time() - start_time:.2f}")
+
     if run_5:
         print("Running exp5")
         # results5 = get_min_values(embeddings, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
@@ -1359,6 +946,7 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         print(cluster_generators)
         results5 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results5, f"UCB acquisition (alpha = {alpha}) ")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     if run_6:
         print("Running exp6")
@@ -1366,11 +954,13 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         # update_results(results, results6, "Diverse embeddings acquisition")
         # results6 = get_diverse_embeddings_cosine(embeddings, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
         # update_results(results, results6, "Diverse embeddings cosine dissimilarity acquisition (min linkage dissimilarity) ")
-        alpha = 0.5
+        alpha = 1.0
         # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
         print(cluster_generators)
         results6 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results6, f"UCB acquisition (alpha = {alpha}) ")
+        print(f"Time is , {time.time() - start_time:.2f}")
+
     if run_7:
         print("Running exp7")
 
@@ -1381,10 +971,11 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         # cluster_generators = [[2, 3, 1, 4, 5, 0, 6, 7, 8], [11, 10, 8, 9, 7, 12, 13, 6, 14]]
         # cluster_generators = [list(range(15))]
         # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
-        # cluster_generators = [[5, 4, 6, 3, 7], [12, 11, 13, 10, 14], [2, 3, 1, 4, 0], [10, 9, 11, 7, 6], [0, 1, 2, 3, 4], [7, 6, 5, 8, 10], [9, 8, 10, 7, 6], [13, 14, 12, 11, 10]]
+        cluster_generators = [[5, 4, 6, 3, 7], [12, 11, 13, 10, 14], [2, 3, 1, 4, 0], [10, 9, 11, 7, 6], [0, 1, 2, 3, 4], [7, 6, 5, 8, 10], [9, 8, 10, 7, 6], [13, 14, 12, 11, 10]]
         print("Cluster generators", cluster_generators)
         results7 = get_from_epistasis_clusters(embeddings, targets, cluster_generators, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results7, "Epistasis cluster exploitation")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     print("Calculating correlations")
 
@@ -1397,30 +988,32 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
         print(cluster_generators)
         results8 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights,  alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
         update_results(results, results8, f"UCB acquisition (alpha = {alpha}) ")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     if run_9:
         print("Running exp9")
         # results9 = get_diverse(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, 'max_linkage', 10, plot_corr)
         # update_results(results, results9, "Diverse acquisition (max linkage)")
         # results9 = get_diverse2(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
-        # results9 = get_sparse(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
-        # update_results(results, results9, "Sparse acquisition")
-        alpha = 0.01
-        # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
-        print(cluster_generators)
-        results9 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights,  alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
-        update_results(results, results9, f"UCB acquisition (alpha = {alpha}) ")
-    
+        results9 = get_sparse(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+        update_results(results, results9, "Sparse acquisition")
+        # alpha = 0.01
+        # # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
+        # print(cluster_generators)
+        # results9 = get_ucb(embeddings, sequences, targets, clusters, cluster_weights,  alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+        # update_results(results, results9, f"UCB acquisition (alpha = {alpha}) ")
+        print(f"Time is , {time.time() - start_time:.2f}")
+
     if run_10:
         print("Running exp10")
-        # results10 = get_diverse_embeddings(embeddings, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
-        # update_results(results, results10, "Diverse embeddings acquisition (min linkage)")
-        alpha = -1
-        # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
-        print(cluster_generators)
-        results10 = get_ucb_auto_weight(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
-        update_results(results, results10, f"UCB auto weight acquisition (alpha = {alpha}) ")
-    
+        results10 = get_diverse_embeddings(embeddings, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
+        update_results(results, results10, "Diverse embeddings acquisition (min linkage)")
+        # alpha = -1
+        # # cluster_generators=[[4, 5, 3, 6, 2, 7, 8, 1], [12, 11, 13, 10, 14, 7, 9, 8], [1, 2, 0, 3, 4, 5, 6, 7], [9, 7, 8, 6, 10, 11, 5, 4], [14, 13, 12, 11, 10, 8, 9, 7]]
+        # print(cluster_generators)
+        # results10 = get_ucb_auto_weight(embeddings, sequences, targets, clusters, cluster_weights, alpha, cycles, samples_per_cycle, folder_path, init_size, plot_corr)
+        # update_results(results, results10, f"UCB auto weight acquisition (alpha = {alpha}) ")
+        print(f"Time is , {time.time() - start_time:.2f}")
     if run_11:
         print("Running exp11")
         # results11 = get_diverse_embeddings(embeddings, targets, cycles, samples_per_cycle, folder_path, 'max_linkage', init_size, plot_corr)
@@ -1429,54 +1022,72 @@ def run_experiments(run_1=True, run_2=True, run_3=True, run_4=True, run_5=True, 
 
         results11 = get_diverse(embeddings, sequences, targets, cycles, samples_per_cycle, folder_path, 'min_linkage', init_size, plot_corr)
         update_results(results, results11, "Diverse acquisition (min linkage)")
+        print(f"Time is , {time.time() - start_time:.2f}")
 
     print("Done Runnning one set of experiments")   
     return results, labels
     
 
 
-cycles = 3
+cycles = 50
 samples_per_cycle = 1
-runs = 2
-init_size=3
+runs = 112
+init_size=10
 
 # Current date and time
 now = datetime.datetime.now()
 
 # Format datetime in YYYYMMDD_HHMMSS format
 timestamp = now.strftime("%Y%m%d_%H%M%S")
-file_names = f'{timestamp}_al_gp'
+file_names = f'{timestamp}_al_lin_outcome'
 
-folder_path = f'runs/{file_names}_{dataset_name}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size'
+folder_path = f'./runs/{file_names}_{dataset_name}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size'
 print("Folder path", folder_path)
 
 
 
-
-def run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=False, run_11=True, runs=5, cycles=10, samples_per_cycle=1, init_size=10, folder_path='runs/folder_unspecified'):
-    def run_single_experiment(_):
-        return run_experiments(run_1, run_2, run_3, run_4, run_5, run_6, run_7, run_8, run_9, run_10, run_11, runs, cycles, samples_per_cycle, init_size, folder_path)
-
-    def merge_results(main_results, partial_results):
-        for key in main_results.keys():
-            main_results[key].extend(partial_results[key])
-
-    # with Pool(processes=4) as pool:  # Adjust the number of processes as needed
-    #         all_results = pool.map(run_single_experiment, range(runs))
+def run_parallel_experiments(run_1, run_2, run_3, run_4, run_5, run_6, run_7, run_8, run_9, run_10, run_11, runs=5, cycles=10, samples_per_cycle=1, init_size=10, folder_path='runs/folder_unspecified'):
+    np.random.seed()  # Ensure the main process has a unique seed
+    seeds = np.random.randint(0, 2**32 - 1, size=runs)  # Generate unique seeds for each run
+    tasks = [(run_1, run_2, run_3, run_4, run_5, run_6, run_7, run_8, run_9, run_10, run_11, cycles, samples_per_cycle, init_size, folder_path, seeds[i]) for i in range(runs)]
+    num_process = 112
+    with Pool(processes=num_process) as pool:  # Adjust the number of processes as needed
+            all_results = pool.map(run_experiments, tasks)
         
-    all_results  = []
-    for k in range(runs):
-        all_results.append(run_single_experiment(k))
-    print('reutrned results', all_results)
+    # all_results  = []
+    # for k in range(runs):
+    #     all_results.append(run_single_experiment(k))
     return all_results
 
 
 
 
-results = run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=False, run_7=False, run_8=False, run_9=False, run_10=False, run_11=True, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
+results = run_parallel_experiments(run_1=False, run_2=False, run_3=True, run_4=False, run_5=False, run_6=True, run_7=False, run_8=False, run_9=True, run_10=True, run_11=True, runs=runs, cycles=cycles, samples_per_cycle=samples_per_cycle, init_size=init_size, folder_path=folder_path)
+print("All results", results)
 
 
-np.save("all_results_{cycles}_cycles.npy", results)
+# Obtain the strategy names from the results
+strategies = results[0][1]
+
+# Initialize dictionaries to hold mean and std values
+r2_means = {strategy: [] for strategy in strategies}
+r2_stds = {strategy: [] for strategy in strategies}
+
+# Extract R² scores and compute mean and std
+for strategy_idx, strategy in enumerate(strategies):
+    all_r2_scores = []
+    for result in results:
+        strategy_r2_scores = result[0]['r_squared'][strategy_idx]
+        all_r2_scores.append(strategy_r2_scores[0])
+    # Convert to numpy array for easier calculation
+    all_r2_scores = np.array(all_r2_scores)
+    r2_means[strategy] = np.mean(all_r2_scores, axis=0)
+    r2_stds[strategy] = np.std(all_r2_scores, axis=0)
+
+np.save(f'{folder_path}/{file_names}_{dataset_name}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size_r2_means.npy', r2_means)
+np.save(f'{folder_path}/{file_names}_{dataset_name}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size_r2_stds.npy', r2_stds)
+
+print("Done saving the files")
 
 # plot_results(results['pearson'], labels, 'Pearson Correlation', folder_path)
 # plot_results(results['spearman'], labels, 'Spearman Correlation', folder_path)

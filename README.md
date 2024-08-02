@@ -12,6 +12,13 @@ mamba activate myenv
 sbatch finet_tune.sh
 
 # To argparse the hyperparameters
+sbatch esm_and_ml/main_embeddings.sh --epochs 20 --samples 1000 --test_prop 0.9 --layers_trained 4 --batch_size 8 --decoder_
+type mlp --save_model --decoder_lr 0.000001 --base_lr 0.0000001
+
+
+esm_and_ml/main_embeddings.sh --epochs 10 --samples 1000 --test_prop 0.9 --layers_trained 4 --batch_size
+ 32 --decoder_type mlp --base_lr 0.00001 --decoder_lr 0.001 --save_model --antibody log10Kd_ACE2
+
 
 sbatch main.sh --epochs 10 --samples 550 --test_prop 0.90 --layers_trained 0 --batch_size 4 --base_lr 0 --decoder_lr 0.00001 --decoder_type mlp --plot_loss
 

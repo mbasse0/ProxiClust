@@ -20,4 +20,4 @@ echo "Using Python version:"
 srun python --version
 
 # Execute the Python script with command-line arguments passed to this script
-srun python al_exp.py "$@"
+srun python data_acquisition/al_exp.py "$@"

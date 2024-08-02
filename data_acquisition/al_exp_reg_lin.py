@@ -57,7 +57,8 @@ print('Load the dataset')
 # dataset_path = 'df_bloom_complete.csv'
 # dataset_path = 'df_desai_new.csv'
 # dataset_path = 'df_Desai_15loci_complete.csv'
-dataset_path = 'df_desai_old_full.csv'
+dataset_name = "df_desai_old_full"
+dataset_path = f'./datasets/{dataset_name}.csv'
 
 print(dataset_path)
 df = pd.read_csv(dataset_path)
@@ -558,7 +559,7 @@ def plot_results(datasets, labels, title, folder_path):
 
     plt.xlabel('Number of Sampling Cycles')
     plt.ylabel(title)
-    plt.title(f'{title} over Sampling Cycles for {antibody} ({dataset_path} dataset)')
+    plt.title(f'{title} over Sampling Cycles for {antibody} ({dataset_name} dataset)')
     plt.legend()
     plt.grid(True)
     plt.savefig(folder_path + f'/{title.replace(" ", "_").lower()}.png')
@@ -819,7 +820,7 @@ now = datetime.datetime.now()
 timestamp = now.strftime("%Y%m%d_%H%M%S")
 file_names = f'{timestamp}_al_gp'
 
-folder_path = f'runs/{file_names}_reg_lin_{dataset_path}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size'
+folder_path = f'../runs/{file_names}_reg_lin_{dataset_name}_{antibody}_{cycles}cycles_{samples_per_cycle}samples_per_cycle_{runs}runs_{init_size}init_size'
 print("Folder path", folder_path)
 
 

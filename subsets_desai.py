@@ -29,7 +29,7 @@ os.makedirs(folder_path, exist_ok=True)
 
 
 
-df_sorted = pd.read_csv('df_desai_old_full.csv')
+df_sorted = pd.read_csv('datasets/df_desai_old_full.csv')
 # df_sorted = pd.read_csv('df_desai_new_full.csv')
 
 
@@ -70,16 +70,22 @@ def sub_r2_compute(args):
         r2_splits.append(r2)
     return np.mean(r2_splits)
 
-num_splits = 100
+num_splits = 1000
 print("Num splits,", num_splits)
 
-num_comb = 500
+num_comb = 1000
 print("Num combinations,", num_comb)
 antibody = "log10Kd_ACE2"
+# antibody = "log10Kd_REGN10987"
+# antibody = 'log10Kd_S309'
 
-subset_sizes = [10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 400]
+
+
+subset_sizes = [10, 20, 30, 40, 50, 70, 100, 150, 200, 300, 400, 500 , 750, 1000]
 print("subset sizes", subset_sizes)
-for j in range(7,16):
+list_j = range(7,16)
+list_j = [7,14]
+for j in list_j:
     mean_r2_list = []
     for size in subset_sizes:
         if size < 2**j:
@@ -100,4 +106,4 @@ for j in range(7,16):
             print("R² score for ", j, "loci combinatorial dataset with ", size, " training samples", np.mean(r2_list))
         else:
             mean_r2_list.append(np.nan)
-    np.save(folder_path + f"/r2_scores_{j}_loci.npy", mean_r2_list)
+    np.save(folder_path + f"/r2_scores_{j}_loci_{num_comb}comb_{num_splits}splits{antibody}.npy", mean_r2_list)

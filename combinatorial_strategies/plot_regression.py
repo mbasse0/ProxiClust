@@ -8,7 +8,8 @@ from sklearn.svm import SVR
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPRegressor
 from sklearn.linear_model import Ridge
-
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
 
 
 def plot_regression(training_set, test_set, mut_name, antibody, train_column="onehot",model_type='linear', show=True, use_onehot=True):
@@ -53,8 +54,12 @@ def plot_regression(training_set, test_set, mut_name, antibody, train_column="on
         model = Ridge(alpha=1.0)
         X_train_used = X_train_scaled
         X_test_used = X_test_scaled
+    elif model_type == 'second_order':
+        model = LinearRegression()
+        poly = PolynomialFeatures(degree=2, include_bias=False)
+        X_train_used = poly.fit_transform(X_train)
+        X_test_used = poly.transform(X_test)
     else:  # Default to linear regression
-        from sklearn.linear_model import LinearRegression
         model = LinearRegression()
         X_train_used = X_train
         X_test_used = X_test

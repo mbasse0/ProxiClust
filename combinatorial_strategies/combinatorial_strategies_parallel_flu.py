@@ -205,10 +205,9 @@ def sub_choose_exp(args):
     return r2_strat, r2_benchmark, chosen_ind, quantile
 
 
-def proximity_strategy(df, test_ind, antibody, desai_mut_pos, residues_chain_RBD, mut_indices, n_exp, samples_per_exp):
-    subset_mut_pos = [desai_mut_pos[i] for i in mut_indices] 
-    desai_residues = residues_chain_RBD.iloc[subset_mut_pos]
-    desai_positions = desai_residues[["x_coord", "y_coord", "z_coord"]].values
+
+
+def proximity_strategy(df, test_ind, antibody, desai_positions, mut_indices, n_exp, samples_per_exp):
 
     # Compute the R² for the proximity strategy
     ind, dist = proximity_clustering(desai_positions, n_exp, k=samples_per_exp)
@@ -222,9 +221,29 @@ def proximity_strategy(df, test_ind, antibody, desai_mut_pos, residues_chain_RBD
         training_set = pd.concat([training_set, get_subset_combinatorial(df, indices)])
     training_set = training_set.drop_duplicates(subset=['onehot'])
     test_set = df.iloc[test_ind]
-    r2_strat = plot_regression(training_set, test_set, "custom split", antibody, "onehot", "linear", show=False, use_onehot=True)
+    r2_strat = plot_regression(training_set, test_set, "custom split", antibody, "onehot", "random_forest", show=False, use_onehot=True)
     print("R² for strategy", r2_strat)
     return r2_strat
+
+
+
+def proximity_strategy2(df, test_ind, antibody, desai_positions, mut_indices, n_exp, samples_per_exp):
+
+    # Compute the R² for the proximity strategy
+    ind, dist = proximity_clustering(desai_positions, n_exp, k=samples_per_exp)
+    strategy_lists = [[mut_indices[el] for el in ind] for ind in ind.values()]
+    # strategy_lists, dist = uneven_proximity_clustering(desai_positions, n_exp, max_exp_size=samples_per_exp)
+    
+    print("Proximal Strategy gives ", strategy_lists)
+
+    training_set = None
+    for indices in strategy_lists:
+        training_set = pd.concat([training_set, get_subset_combinatorial(df, indices)])
+    training_set = training_set.drop_duplicates(subset=['onehot'])
+    test_set = df.iloc[test_ind]
+    r2_strat = plot_regression(training_set, test_set, "custom split", antibody, "onehot", "random_forest", show=False, use_onehot=True)
+    print("R² for strategy", r2_strat)
+    return r2_strat, len(training_set)
 
 
 def get_r2_from_strategy(args):
@@ -234,7 +253,7 @@ def get_r2_from_strategy(args):
         training_set = pd.concat([training_set, get_subset_combinatorial(df, indices)])
     training_set = training_set.drop_duplicates(subset=['onehot'])
     test_set = df.iloc[test_ind]
-    r2_strat = plot_regression(training_set, test_set, "custom split", antibody, "onehot", "linear", show=False, use_onehot=True)
+    r2_strat = plot_regression(training_set, test_set, "custom split", antibody, "onehot", "random_forest", show=False, use_onehot=True)
     return r2_strat
 
     
@@ -256,13 +275,13 @@ def main():
 
         print("Timestamp", timestamp)
         file_names = f'{timestamp}'
-
-        folder_path = f'../runs/{file_names}'
+        print(file_names)
+        folder_path = f'./runs/{file_names}'
         os.makedirs(folder_path, exist_ok=True)
 
         # Load the dataframe
 
-        dataset_path = 'df_desai_old_full.csv'
+        dataset_path = './datasets/CH65_SI06_processed.csv'
         print(dataset_path)
         df_sorted = pd.read_csv(dataset_path)
 
@@ -271,77 +290,42 @@ def main():
 
 
         # antibody = "log10Kd_REGN10987"
-        antibody = 'log10Kd_S309'
+        # antibody = 'log10Kd_S309'
         # antibody = "log10Kd_ACE2"
-        # antibody = "log10Kd_CoV555"
-        # antibody = "log10Kd_CB6"
+        antibody = "log10Kd_pinned"
 
         print(antibody)
         targets_sorted = df_sorted[antibody].to_list()
         ## Load the pdb file
-        
-        if antibody == "log10Kd_ACE2":
-            file_path = "../PDB_files/6m0j.pdb"
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            num_residues = 15
-        elif antibody=="log10Kd_REGN10987":
-            file_path = "../PDB_files/8j26.pdb"
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            num_residues = 15
-        elif antibody=="log10Kd_S309":
-            file_path = "../PDB_files/7xck.pdb"
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            desai_mut_pos = [el+9 for el in desai_mut_pos]
-            num_residues = 15
-        elif antibody == "log10Kd_CoV555":
-            file_path = "../PDB_files/7kmg.pdb"
-            num_residues = 15
-        elif antibody == "log10Kd_CB6":
-            file_path = "../PDB_files/7c01.pdb"
-            num_residues = 15
 
+        if antibody == "log10Kd_pinned":
+            file_path = "./PDB_files/5ugy.pdb"
+            num_residues = 16
         
 
 
         ppdb = PandasPdb().read_pdb(file_path)
 
+        list_mut_heavy = [31, 33, 34, 35, 52, 57, 83, 84, 85, 87]
+        adjusted_mut_heavy = [el - 1 for el in list_mut_heavy]
+
+
+        list_mut_light = [26, 29, 35, 48, 49, 98]
+        adjusted_mut_light = [el - 2 for el in list_mut_light]
+
+        adjusted_list_mut = adjusted_mut_light + adjusted_mut_heavy
 
         atom_df = ppdb.df["ATOM"]
         CA_df = atom_df[atom_df["atom_name"] == "CA"]
 
+        if antibody=="log10Kd_pinned":
+            residues_RBS_light = CA_df[CA_df["chain_id"]=='L'].sort_values("residue_number")
+            residues_RBS_heavy = CA_df[CA_df["chain_id"]=='H'].sort_values("residue_number")
+            residues_RBS = pd.concat([residues_RBS_light, residues_RBS_heavy])
 
-        if antibody == "log10Kd_ACE2":
-            residues_chain_ab = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
-            residues_chain_RBD = CA_df[CA_df["chain_id"]=='E'].sort_values("residue_number")
-            residues_chain_RBD = residues_chain_RBD[residues_chain_RBD["alt_loc"] != 'A']
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            desai_mut_pos = [pos-2 for pos in desai_mut_pos]
-        elif antibody=="log10Kd_REGN10987":
-            residues_chain_RBD = CA_df[CA_df["chain_id"]=='C'].sort_values("residue_number")
-            residues_chain_ab_part1 = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
-            residues_chain_ab_part2 = CA_df[CA_df["chain_id"]=='B'].sort_values("residue_number")
-            residues_chain_ab = pd.concat([residues_chain_ab_part1, residues_chain_ab_part2])
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            desai_mut_pos = [pos-2 for pos in desai_mut_pos]
-        elif antibody=="log10Kd_S309":
-            residues_chain_ab_part1 = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
-            residues_chain_ab_part2 = CA_df[CA_df["chain_id"]=='B'].sort_values("residue_number")
-            residues_chain_ab = pd.concat([residues_chain_ab_part1, residues_chain_ab_part2])
-            residues_chain_RBD = CA_df[CA_df["chain_id"]=='M'].sort_values("residue_number")
-        elif antibody == "log10Kd_CoV555":
-            residues_chain_RBD = CA_df[CA_df["chain_id"]=='C'].sort_values("residue_number")
-            residues_chain_ab_part1 = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
-            residues_chain_ab_part2 = CA_df[CA_df["chain_id"]=='B'].sort_values("residue_number")
-            residues_chain_ab = pd.concat([residues_chain_ab_part1, residues_chain_ab_part2])
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            desai_mut_pos = [pos-3 for pos in desai_mut_pos]
-        elif antibody == "log10Kd_CB6":
-            residues_chain_RBD = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
-            residues_chain_ab_part1 = CA_df[CA_df["chain_id"]=='C'].sort_values("residue_number")
-            residues_chain_ab_part2 = CA_df[CA_df["chain_id"]=='D'].sort_values("residue_number")
-            residues_chain_ab = pd.concat([residues_chain_ab_part1, residues_chain_ab_part2])
-            desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
-            desai_mut_pos = [pos-2 for pos in desai_mut_pos]
+            residues_antigen_1 = CA_df[CA_df["chain_id"]=='A'].sort_values("residue_number")
+            residues_antigen_2 = CA_df[CA_df["chain_id"]=='B'].sort_values("residue_number")
+            residues_antigen = pd.concat([residues_antigen_1, residues_antigen_2])
 
 
         aa_dict = {
@@ -352,37 +336,79 @@ def main():
             'THR': 'T', 'VAL': 'V', 'TRP': 'W', 'TYR': 'Y'
         }
 
-        residues_chain_ab["single_letter_residue"] = residues_chain_ab["residue_name"].map(aa_dict)
-        residues_chain_RBD["single_letter_residue"] = residues_chain_RBD["residue_name"].map(aa_dict)
-
-        amino_acid_sequence_ab = ''.join(residues_chain_ab["single_letter_residue"].values)
-        amino_acid_sequence_RBD = ''.join(residues_chain_RBD["single_letter_residue"].values)
+        residues_RBS_light["single_letter_residue"] = residues_RBS_light["residue_name"].map(aa_dict)
+        residues_RBS_heavy["single_letter_residue"] = residues_RBS_heavy["residue_name"].map(aa_dict)
+        
+        amino_acid_sequence_RBS_light = ''.join(residues_RBS_light["single_letter_residue"].values)
+        amino_acid_sequence_RBS_heavy = ''.join(residues_RBS_heavy["single_letter_residue"].values)
 
         # These are the positions of mutations in Wildtype
-        
+        # desai_mut_pos = [ 8, 40, 42, 44, 86,109, 115, 146, 147, 153, 162, 165, 167, 170, 174]
+        # desai_mut_pos = [pos-2 for pos in desai_mut_pos]
 
         
-        desai_residues = residues_chain_RBD.iloc[desai_mut_pos]
+        desai_residues_light = residues_RBS_light.iloc[adjusted_mut_light]
+        desai_residues_heavy = residues_RBS_heavy.iloc[adjusted_mut_heavy]
+        desai_residues = pd.concat([desai_residues_light, desai_residues_heavy])
         desai_positions = desai_residues[["x_coord", "y_coord", "z_coord"]].values
 
-        interface_size = 10
-        interface_residues = get_interface(desai_positions, residues_chain_ab, interface_size)
+
+        WILDTYPE_light = "SVLTQPPSVSVAPGQTARITCGGNNIGSKSVHWYQQKPGQAPVLVVYDDSDRPSGIPERFSGSNSGNTATLTISRVEAGDEADYYCQVWDSSSDHVVFGGGTKLTVL"
+        WILDTYPE_heavy = "VQLVQSGAEVKKPGASVKVSCKASGYTFTGYYMHWVRQAPGQGLEWMGWINPNSGGTNYAQKFQGWVTMTRDTAISTAYMELSRLRSDDTAVYYCARGGLEPRSVDYYYYGMDVWGQGTTVTVSS"
+        mut_form_light = amino_acid_sequence_RBS_light[:107]
+        mut_form_heavy  = amino_acid_sequence_RBS_heavy[1:126]
+
+        interface_size = 12
+        interface_residues = get_interface(desai_positions, residues_antigen, interface_size)
         print(f"Interface of size {interface_size} for ", antibody, "is ", interface_residues)
 
 
-        num_processes = 48
+        num_processes = 112
+        print("Random Forest")
+
+
+         # EXP 0-------------------------------------------------------------------------------------------------------------
+        print("Random forest ")
+        # test_ind = random.sample(range(len(df_sorted)), 15000)
+
+        # results = []
+        # for n_exp in range(2,8):
+        #     print("N exp", n_exp)
+        #     for samples_per_exp in range(2,9):
+        #         print("Samples per exp", samples_per_exp)
+        #         r2_opti, size_opti = proximity_strategy2(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
+        #         print("R2 opti", r2_opti)
+
+        #         r2_all, size_all = proximity_strategy2(df_sorted, test_ind, antibody, desai_positions, list(range(num_residues)), n_exp, samples_per_exp)
+        #         print("R2 all", r2_all)
+
+        #         # Append the results to the list
+        #         results.append([n_exp, samples_per_exp, size_opti, size_all, r2_opti, r2_all])
+
+        # # Convert the results to a NumPy array
+        # results_array = np.array(results)
+
+        # # Save the results array to a .npy file
+        # np.save(folder_path+f"/{antibody}results_grid.npy", results_array)
+
+
         # EXP 1 -------------------------------------------------------------------------------------------------------------
         
         n_exp = 2
         samples_per_exp = 6
         print("Samples per exp", samples_per_exp)
         print("N exp", n_exp)
-        test_ind = random.sample(range(len(df_sorted)), 15000)
-
-        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, interface_residues, n_exp, samples_per_exp)
+        test_ind = random.sample(range(len(df_sorted)), 5000)
+        subset_mut_pos = [adjusted_list_mut[i] for i in interface_residues] 
+        desai_residues = residues_RBS.iloc[subset_mut_pos]
+        desai_positions = desai_residues[["x_coord", "y_coord", "z_coord"]].values
+        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
         print("R2 opti", r2_opti)
 
-        r2_all = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, list(range(num_residues)), n_exp, samples_per_exp)
+        subset_mut_pos = [adjusted_list_mut[i] for i in range(num_residues)] 
+        desai_residues = residues_RBS.iloc[subset_mut_pos]
+        desai_positions = desai_residues[["x_coord", "y_coord", "z_coord"]].values
+        r2_all = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, list(range(num_residues)), n_exp, samples_per_exp)
         print("R2 all", r2_all)
 
         # Parallelize the exhaustive scan on interface
@@ -395,6 +421,7 @@ def main():
         tasks = [(df_sorted, antibody, strat, test_ind) for strat in indices_lists]
         r2_list_interface = []
         print("Starting processes for interface")
+        print("Indices lists for interface", len(indices_lists), indices_lists[0])
         # Use multiprocessing to run the loop in parallel
         with Pool(processes=num_processes) as pool:  # Match the number of processes to the number of allocated CPU cores
             results = pool.map(get_r2_from_strategy, tasks)
@@ -423,7 +450,7 @@ def main():
         for r2_list in results:
             r2_lists.append(r2_list)
 
-        np.save(folder_path+f"/{antibody}r2_list_interface_exp1_{samples_per_exp}per_exp.npy", r2_list_interface)
+        np.save(folder_path+f"/{antibody}r2_list_interface{interface_size}_exp1_{samples_per_exp}per_exp.npy", r2_list_interface)
         np.save(folder_path+f"/{antibody}r2_lists_exp1_{samples_per_exp}per_exp.npy", r2_lists)
         print("DONE EXP1")
         
@@ -438,10 +465,10 @@ def main():
 
         r2_list_interface = exhaustive_benchmark(df_sorted, antibody, test_ind, n_exp, samples_per_exp, interface_residues, model_type='linear', use_onehot=True)
 
-        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, interface_residues, n_exp, samples_per_exp)
+        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
         print("R2 opti", r2_opti)
 
-        r2_all = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, list(range(num_residues)), n_exp, samples_per_exp)
+        r2_all = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, list(range(num_residues)), n_exp, samples_per_exp)
         print("R2 all", r2_all)
 
         all_subsets = list(combinations(range(15), 7))
@@ -485,7 +512,7 @@ def main():
         # print("samples per exp", samples_per_exp)
         # r2_list_interface = exhaustive_benchmark(df_sorted, antibody, test_ind, n_exp, samples_per_exp, interface_residues, model_type='linear', use_onehot=True)
         
-        # r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, interface_residues, n_exp, samples_per_exp)
+        # r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
 
         # print("R2 opti", r2_opti)
         # np.save(folder_path+f"/{antibody}_r2_list_interface_exp2_{samples_per_exp}per_exp.npy", r2_list_interface)
@@ -499,7 +526,7 @@ def main():
         samples_per_exp = 8
         
 
-        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, interface_residues, n_exp, samples_per_exp)
+        r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
 
         print("R2 opti", r2_opti)
 
@@ -538,7 +565,7 @@ def main():
 
         # for j in range(8,16):
         #     interface_residues = sorted_residues[:j]
-        #     r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_mut_pos, residues_chain_RBD, interface_residues, n_exp, samples_per_exp)
+        #     r2_opti = proximity_strategy(df_sorted, test_ind, antibody, desai_positions, interface_residues, n_exp, samples_per_exp)
         #     r2_opti_list.append(r2_opti)
 
         # np.save(folder_path+"/r2_opti_list_exp6.npy", r2_opti_list)
