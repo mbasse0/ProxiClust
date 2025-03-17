@@ -1,5 +1,5 @@
 
-# Project: ESM_Affinity_Pred
+# Project: ProxiClust
 
 This repository contains Jupyter notebooks and cluster-ready Python code from three different research projects focused on improving data acquisition and predictive modeling for binding affinity prediction using state-of-the-art machine learning techniques. 
 
